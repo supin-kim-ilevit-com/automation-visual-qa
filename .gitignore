@@ -1,0 +1,23 @@
+# 환경변수 및 민감 정보
+.env
+.env.*
+!.env.example
+
+# 의존성
+node_modules/
+
+# 로그
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 에디터
+.vscode/
+.idea/
+
+# Claude / OMC 내부 파일
+.claude/
+.omc/

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Visual QA",
+  "version": "0.1.0",
+  "description": "Figma 디자인과 구현 화면을 AI로 비교합니다",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "popup/index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

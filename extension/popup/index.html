@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Visual QA</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      background: #0f0f0f;
+      color: #e8e8e8;
+    }
+
+    .header {
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid #222;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo {
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(135deg, #7c6af7, #a78bfa);
+      border-radius: 5px;
+      flex-shrink: 0;
+    }
+
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      letter-spacing: -0.2px;
+    }
+
+    .header .version {
+      margin-left: auto;
+      font-size: 10px;
+      color: #555;
+    }
+
+    .body {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    label {
+      font-size: 11px;
+      font-weight: 500;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    label .optional {
+      font-size: 10px;
+      font-weight: 400;
+      color: #444;
+      text-transform: none;
+      letter-spacing: 0;
+      background: #1e1e1e;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    input, select {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: #e8e8e8;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+
+    input:focus, select:focus {
+      border-color: #7c6af7;
+    }
+
+    input::placeholder {
+      color: #444;
+    }
+
+    .frame-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .frame-row select {
+      flex: 1;
+    }
+
+    .btn-load {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: #888;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .btn-load:hover:not(:disabled) {
+      border-color: #7c6af7;
+      color: #a78bfa;
+    }
+
+    .btn-load:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    select option {
+      background: #1a1a1a;
+    }
+
+    .frame-pair {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .frame-pair-item {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .divider {
+      height: 1px;
+      background: #1e1e1e;
+      margin: 2px 0;
+    }
+
+    .capture-btn {
+      background: #7c6af7;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: background 0.15s, transform 0.1s;
+      width: 100%;
+    }
+
+    .capture-btn:hover:not(:disabled) { background: #6c5ce7; }
+    .capture-btn:active:not(:disabled) { transform: scale(0.98); }
+    .capture-btn:disabled {
+      background: #2a2a2a;
+      color: #555;
+      cursor: not-allowed;
+    }
+
+    /* 결과 영역 */
+    .result {
+      display: none;
+      flex-direction: column;
+    }
+
+    .result.visible { display: flex; }
+
+    .result-header {
+      padding: 12px 16px;
+      border-top: 1px solid #222;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .score-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .score-circle {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .score-circle.high   { background: #0d2e1a; color: #4ade80; border: 1.5px solid #166534; }
+    .score-circle.medium { background: #2d2000; color: #fbbf24; border: 1.5px solid #854d0e; }
+    .score-circle.low    { background: #2d0f0f; color: #f87171; border: 1.5px solid #991b1b; }
+
+    .score-label {
+      font-size: 12px;
+      color: #888;
+      line-height: 1.4;
+    }
+
+    .score-label strong {
+      display: block;
+      font-size: 13px;
+      color: #e8e8e8;
+      font-weight: 500;
+    }
+
+    /* 오버레이 슬라이더 */
+    .overlay-section {
+      padding: 12px 16px;
+      border-top: 1px solid #1e1e1e;
+    }
+
+    .overlay-label {
+      font-size: 11px;
+      color: #555;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .overlay-label .side-figma { color: #a78bfa; font-weight: 600; }
+    .overlay-label .side-impl  { color: #60a5fa; font-weight: 600; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: linear-gradient(to right, #7c6af7 var(--pct, 50%), #2a2a2a var(--pct, 50%));
+      outline: none;
+      padding: 0;
+      border: none;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid #7c6af7;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+
+    /* 클립 리빌 이미지 뷰어 */
+    .overlay-images {
+      position: relative;
+      margin-top: 10px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #111;
+      border: 1px solid #222;
+      aspect-ratio: 3 / 5;
+      height: auto;
+      --clip: 50%;
+    }
+
+    .overlay-images img {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .overlay-images img.impl {
+      clip-path: inset(0 calc(100% - var(--clip)) 0 0);
+    }
+
+    .slider-divider {
+      position: absolute;
+      top: 0;
+      left: var(--clip);
+      transform: translateX(-50%);
+      width: 2px;
+      height: 100%;
+      background: #fff;
+      box-shadow: 0 0 6px rgba(0,0,0,0.6);
+      pointer-events: none;
+    }
+
+    .slider-divider::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.5);
+    }
+
+    .overlay-tag {
+      position: absolute;
+      top: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      pointer-events: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    /* 디바이더 기준으로 좌우에 붙어서 같이 이동 */
+    .overlay-tag.figma {
+      left: var(--clip);
+      transform: translateX(10px);
+      background: rgba(124,106,247,0.9);
+      color: #fff;
+    }
+
+    .overlay-tag.impl {
+      left: var(--clip);
+      transform: translateX(calc(-100% - 10px));
+      background: rgba(96,165,250,0.9);
+      color: #fff;
+    }
+
+    /* 이슈 목록 */
+    .issues-list {
+      max-height: 320px;
+      overflow-y: auto;
+      border-top: 1px solid #1e1e1e;
+    }
+
+    .issues-list::-webkit-scrollbar { width: 4px; }
+    .issues-list::-webkit-scrollbar-track { background: #0f0f0f; }
+    .issues-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    .issue-item {
+      padding: 10px 16px;
+      border-bottom: 1px solid #161616;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .issue-item:last-child { border-bottom: none; }
+
+    .issue-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+
+    .issue-dot.critical { background: #f87171; }
+    .issue-dot.major    { background: #fbbf24; }
+    .issue-dot.minor    { background: #60a5fa; }
+
+    .issue-content { flex: 1; min-width: 0; }
+
+    .issue-category {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #555;
+      margin-bottom: 2px;
+    }
+
+    .issue-desc {
+      font-size: 12px;
+      color: #ccc;
+      line-height: 1.4;
+    }
+
+    .issue-fix {
+      font-size: 11px;
+      color: #7c6af7;
+      margin-top: 3px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    /* 상태 메시지 */
+    .status {
+      padding: 10px 16px;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      border-top: 1px solid #1e1e1e;
+      display: none;
+    }
+
+    .status.visible { display: block; }
+    .status.loading { color: #7c6af7; }
+    .status.error   { color: #f87171; }
+
+    .spinner {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border: 1.5px solid #7c6af7;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .footer {
+      padding: 10px 16px;
+      border-top: 1px solid #1a1a1a;
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-secondary {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 7px;
+      color: #888;
+      font-size: 11px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+    }
+
+    .btn-secondary:hover {
+      border-color: #7c6af7;
+      color: #a78bfa;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo"></div>
+    <h1>Visual QA</h1>
+    <span class="version">v0.2</span>
+  </div>
+
+  <div class="body">
+    <!-- Figma Token -->
+    <div class="field">
+      <label>Figma Token</label>
+      <input type="password" id="figma-token" placeholder="figd_..." />
+    </div>
+
+    <!-- Figma File URL -->
+    <div class="field">
+      <label>Figma File URL</label>
+      <div class="frame-row">
+        <input type="text" id="figma-url" placeholder="https://www.figma.com/file/..." />
+        <button class="btn-load" id="btn-load-frames">불러오기</button>
+      </div>
+    </div>
+
+    <!-- Frame 선택: 신규 디자인 + 베이스 -->
+    <div class="frame-pair">
+      <div class="frame-pair-item">
+        <label>신규 디자인 프레임</label>
+        <select id="frame-select" disabled>
+          <option value="">— 불러오기를 눌러주세요 —</option>
+        </select>
+      </div>
+      <div class="frame-pair-item">
+        <label>
+          베이스 화면 프레임
+          <span class="optional">선택사항</span>
+        </label>
+        <select id="base-frame-select" disabled>
+          <option value="">— 선택 안 함 (전체 화면 비교) —</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 캡처 버튼 -->
+    <button class="capture-btn" id="btn-capture" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M6.343 6.343a8 8 0 1 0 11.314 11.314A8 8 0 0 0 6.343 6.343z"/>
+        <path d="M2 12h2M20 12h2M12 2v2M12 20v2"/>
+      </svg>
+      지금 화면 캡처 후 비교
+    </button>
+  </div>
+
+  <!-- 상태 메시지 -->
+  <div class="status" id="status"></div>
+
+  <!-- 결과 영역 -->
+  <div class="result" id="result">
+
+    <!-- 점수 -->
+    <div class="result-header">
+      <div class="score-badge">
+        <div class="score-circle" id="score-circle">—</div>
+        <div class="score-label">
+          <strong id="score-title">분석 완료</strong>
+          <span id="score-subtitle">이슈 0건 발견</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 오버레이 슬라이더 -->
+    <div class="overlay-section">
+      <div class="overlay-label">
+        <span class="side-figma">← Figma</span>
+        <span class="side-impl">구현 →</span>
+      </div>
+      <input type="range" id="overlay-slider" min="0" max="100" value="50" />
+      <div class="overlay-images" id="overlay-container">
+        <img class="figma" id="img-figma" src="" alt="Figma design" />
+        <img class="impl"  id="img-impl"  src="" alt="Implementation" />
+        <div class="slider-divider" id="slider-divider"></div>
+        <span class="overlay-tag figma">Figma</span>
+        <span class="overlay-tag impl">구현</span>
+      </div>
+    </div>
+
+    <!-- 이슈 목록 -->
+    <div class="issues-list" id="issues-list"></div>
+
+    <!-- 하단 버튼 -->
+    <div class="footer">
+      <button class="btn-secondary" id="btn-copy">JSON 복사</button>
+      <button class="btn-secondary" id="btn-reset">다시 비교</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
