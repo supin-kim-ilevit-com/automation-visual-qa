@@ -92,7 +92,7 @@ async function normalizeScreenshot(figmaBase64, implBase64) {
 // ─── Claude Vision: 두 이미지 diff 분석 ─────────────────────
 async function analyzeWithClaude(apiKey, figmaBase64, implBase64, figmaBaseBase64 = null) {
   const systemPrompt = `당신은 UI/UX 품질 검수 전문가입니다.
-이미지를 비교하여 디자인과 구현의 차이를 분석합니다.
+이미지를 비교하여 디자인과 구현의 차이를 정밀하게 분석합니다.
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
 
@@ -103,13 +103,20 @@ async function analyzeWithClaude(apiKey, figmaBase64, implBase64, figmaBaseBase6
       "id": "고유 문자열 (issue_1, issue_2 등)",
       "severity": "critical | major | minor",
       "category": "spacing | color | typography | size | border-radius | shadow | alignment | missing",
-      "description": "한국어로 간결하게 (예: 버튼 좌우 패딩이 더 큽니다)",
-      "expected": "Figma 기준값 (예: padding: 12px 24px)",
-      "actual": "구현된 값 (예: padding: 8px 16px)",
-      "fix": "수정 제안 (예: px-6 → px-4 또는 padding: 12px 24px)"
+      "element": "어떤 UI 요소인지 (예: 상단 타이틀 텍스트, 확인 버튼, 카드 컨테이너)",
+      "description": "한국어로 간결하게. 반드시 구체적 수치를 포함. 상대적 표현('더 큰', '좁아 보임' 등) 절대 금지.",
+      "expected": "Figma 기준값. 반드시 구체적 단위 포함 (예: padding: 12px 24px, font-size: 16px, color: #FF5733, gap: 8px)",
+      "actual": "구현된 값. 반드시 구체적 단위 포함 (예: padding: 8px 16px, font-size: 14px, color: #FF0000, gap: 4px)",
+      "fix": "수정 제안. 구체적 속성명과 값 포함 (예: padding을 12px 24px로 변경, font-size를 16px로 변경)"
     }
   ]
 }
+
+중요 규칙:
+- expected와 actual에는 반드시 px, %, hex, rem 등 구체적인 단위가 있어야 합니다
+- "더 크다", "좁아 보인다", "약간 다르다" 같은 상대적 표현은 절대 사용하지 마세요
+- 수치를 정확히 알 수 없는 경우 "약 Npx" 형식으로 추정값을 명시하세요
+- 색상은 반드시 hex 코드로 표기하세요
 
 severity 기준:
 - critical: 레이아웃 깨짐, 색상 완전 불일치, 컴포넌트 누락

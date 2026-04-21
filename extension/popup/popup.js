@@ -168,14 +168,26 @@ function renderResult(report, screenshotDataUrl) {
 
   issuesList.innerHTML = ''
   if (report.issues?.length > 0) {
-    report.issues.forEach(issue => {
+    const severityOrder = { critical: 0, major: 1, minor: 2 }
+    const sorted = [...report.issues].sort((a, b) =>
+      (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3)
+    )
+    sorted.forEach(issue => {
       const el = document.createElement('div')
       el.className = 'issue-item'
       el.innerHTML = `
         <div class="issue-dot ${issue.severity}"></div>
         <div class="issue-content">
-          <div class="issue-category">${issue.category}</div>
+          <div class="issue-meta">
+            <span class="issue-category">${issue.category}</span>
+            ${issue.element ? `<span class="issue-element">${issue.element}</span>` : ''}
+          </div>
           <div class="issue-desc">${issue.description}</div>
+          ${issue.expected || issue.actual ? `
+            <div class="issue-diff">
+              ${issue.expected ? `<span class="diff-label">Figma</span><span class="diff-value expected">${issue.expected}</span>` : ''}
+              ${issue.actual   ? `<span class="diff-label">현재</span><span class="diff-value actual">${issue.actual}</span>` : ''}
+            </div>` : ''}
           ${issue.fix ? `<div class="issue-fix">${issue.fix}</div>` : ''}
         </div>
       `
@@ -202,16 +214,36 @@ overlaySlider.addEventListener('input', (e) => setClip(e.target.value))
 // ─── 하단 버튼 ───────────────────────────────────────────────
 $('btn-copy').addEventListener('click', async () => {
   const data = await chrome.storage.local.get('last_report')
-  if (data.last_report) {
-    await navigator.clipboard.writeText(JSON.stringify(data.last_report, null, 2))
-    showStatus('JSON 복사됨!', 'loading')
-    setTimeout(hideStatus, 1500)
-  }
+  if (!data.last_report) return
+  const report = data.last_report
+  const severityOrder = { critical: 0, major: 1, minor: 2 }
+  const sorted = [...(report.issues ?? [])].sort((a, b) =>
+    (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3)
+  )
+  const lines = ['다음 Visual QA 이슈들을 수정해줘:', '']
+  sorted.forEach((issue, i) => {
+    lines.push(`${i + 1}. [${issue.severity}] ${issue.category}${issue.element ? ` — ${issue.element}` : ''}`)
+    lines.push(`   ${issue.description}`)
+    if (issue.expected) lines.push(`   Figma 기준: ${issue.expected}`)
+    if (issue.actual)   lines.push(`   현재 구현: ${issue.actual}`)
+    if (issue.fix)      lines.push(`   수정 방법: ${issue.fix}`)
+    lines.push('')
+  })
+  await navigator.clipboard.writeText(lines.join('\n'))
+  showStatus('에이전트 전달용 텍스트 복사됨!', 'loading')
+  setTimeout(hideStatus, 1500)
 })
 
 $('btn-reset').addEventListener('click', () => {
   hideResult()
   btnCapture.disabled = false
+})
+
+$('btn-toggle-overlay').addEventListener('click', () => {
+  const body = $('overlay-body')
+  const btn  = $('btn-toggle-overlay')
+  const collapsed = body.classList.toggle('collapsed')
+  btn.textContent = collapsed ? '보이기 ↓' : '숨기기 ↑'
 })
 
 // ─── 유틸 ────────────────────────────────────────────────────

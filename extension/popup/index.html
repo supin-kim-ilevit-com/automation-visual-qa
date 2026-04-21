@@ -70,10 +70,10 @@
     label .optional {
       font-size: 10px;
       font-weight: 400;
-      color: #444;
+      color: #888;
       text-transform: none;
       letter-spacing: 0;
-      background: #1e1e1e;
+      background: #2a2a2a;
       padding: 1px 5px;
       border-radius: 3px;
     }
@@ -238,6 +238,33 @@
       margin-bottom: 8px;
       display: flex;
       justify-content: space-between;
+      align-items: center;
+    }
+
+    .btn-toggle-overlay {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 10px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      line-height: 1;
+    }
+
+    .btn-toggle-overlay:hover { color: #a78bfa; }
+
+    .overlay-body {
+      overflow: hidden;
+      transition: max-height 0.25s ease, opacity 0.2s ease;
+      max-height: 600px;
+      opacity: 1;
+    }
+
+    .overlay-body.collapsed {
+      max-height: 0;
+      opacity: 0;
+      margin-bottom: -8px;
     }
 
     .overlay-label .side-figma { color: #a78bfa; font-weight: 600; }
@@ -379,13 +406,31 @@
 
     .issue-content { flex: 1; min-width: 0; }
 
+    .issue-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+
     .issue-category {
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: #555;
-      margin-bottom: 2px;
+    }
+
+    .issue-element {
+      font-size: 10px;
+      color: #888;
+      background: #1e1e1e;
+      padding: 1px 5px;
+      border-radius: 3px;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .issue-desc {
@@ -394,10 +439,38 @@
       line-height: 1.4;
     }
 
+    .issue-diff {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 2px 6px;
+      margin-top: 5px;
+      align-items: baseline;
+    }
+
+    .diff-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      padding-top: 1px;
+    }
+
+    .diff-value {
+      font-size: 11px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    .diff-label:nth-of-type(1) { color: #a78bfa; }
+    .diff-value.expected { color: #a78bfa; background: rgba(124,106,247,0.1); }
+    .diff-label:nth-of-type(2) { color: #60a5fa; }
+    .diff-value.actual   { color: #f87171; background: rgba(248,113,113,0.1); }
+
     .issue-fix {
       font-size: 11px;
       color: #7c6af7;
-      margin-top: 3px;
+      margin-top: 4px;
       font-family: 'SF Mono', 'Fira Code', monospace;
     }
 
@@ -532,7 +605,9 @@
       <div class="overlay-label">
         <span class="side-figma">← Figma</span>
         <span class="side-impl">구현 →</span>
+        <button class="btn-toggle-overlay" id="btn-toggle-overlay">숨기기 ↑</button>
       </div>
+      <div class="overlay-body" id="overlay-body">
       <input type="range" id="overlay-slider" min="0" max="100" value="50" />
       <div class="overlay-images" id="overlay-container">
         <img class="figma" id="img-figma" src="" alt="Figma design" />
@@ -541,6 +616,7 @@
         <span class="overlay-tag figma">Figma</span>
         <span class="overlay-tag impl">구현</span>
       </div>
+      </div><!-- /overlay-body -->
     </div>
 
     <!-- 이슈 목록 -->
@@ -548,7 +624,7 @@
 
     <!-- 하단 버튼 -->
     <div class="footer">
-      <button class="btn-secondary" id="btn-copy">JSON 복사</button>
+      <button class="btn-secondary" id="btn-copy">에이전트 전달</button>
       <button class="btn-secondary" id="btn-reset">다시 비교</button>
     </div>
   </div>
