@@ -184,15 +184,21 @@ severity 기준:
   const data = await res.json()
   const text = data.content?.[0]?.text ?? ''
 
-  // JSON 파싱 (마크다운 코드블록 제거)
-  const clean = text.replace(/```json\n?|\n?```/g, '').trim()
+  // JSON 파싱: 코드블록 제거 → 중괄호 범위 추출 순으로 시도
+  const stripped = text.replace(/```json\n?|\n?```/g, '').trim()
 
-  try {
-    return JSON.parse(clean)
-  } catch {
-    console.error('[Claude 응답 파싱 실패]', text)
-    throw new Error('AI 분석 결과 파싱에 실패했습니다.')
+  // 1차: 전체 파싱
+  try { return JSON.parse(stripped) } catch {}
+
+  // 2차: 첫 { ~ 마지막 } 추출
+  const start = stripped.indexOf('{')
+  const end   = stripped.lastIndexOf('}')
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(stripped.slice(start, end + 1)) } catch {}
   }
+
+  console.error('[Claude 응답 파싱 실패]', text)
+  throw new Error('AI 분석 결과 파싱에 실패했습니다.')
 }
 
 // ─── Health check ─────────────────────────────────────────────
