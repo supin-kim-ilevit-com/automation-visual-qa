@@ -3,58 +3,79 @@ import cors from 'cors'
 import sharp from 'sharp'
 
 const app  = express()
-const PORT = 3000
+const PORT = process.env.PORT || 3000
 
-app.use(cors())
-app.use(express.json({ limit: '20mb' })) // 스크린샷 base64 크기 고려
+// chrome-extension:// 오리진만 허용 (ID 무관)
+app.use(cors({ origin: /^chrome-extension:\/\// }))
+app.use(express.json({ limit: '20mb' }))
+
+// ─── 타임아웃 fetch ───────────────────────────────────────────
+function fetchWithTimeout(url, options = {}, timeoutMs = 30_000) {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(id))
+}
+
+// ─── Figma ID 형식 검증 ───────────────────────────────────────
+const FIGMA_ID_RE = /^[a-zA-Z0-9_:/-]+$/
+function isValidFigmaId(id) { return FIGMA_ID_RE.test(id) }
 
 // ─── POST /compare ────────────────────────────────────────────
 app.post('/compare', async (req, res) => {
   const { figmaToken, figmaFileKey, figmaFrameId, figmaBaseFrameId, screenshotDataUrl } = req.body
 
-  // 유효성 검사
-  if (!figmaToken || !figmaFileKey || !figmaFrameId || !screenshotDataUrl) {
-    return res.status(400).json({ message: '필수 파라미터가 누락됐습니다.' })
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  if (!anthropicKey) return res.status(500).json({ message: 'ANTHROPIC_API_KEY 환경변수가 없습니다.' })
+
+  const missing = ['figmaToken', 'figmaFileKey', 'figmaFrameId', 'screenshotDataUrl']
+    .filter(k => !req.body[k])
+  if (missing.length > 0) {
+    return res.status(400).json({ message: `필수 파라미터 누락: ${missing.join(', ')}` })
   }
 
-  const anthropicKey = process.env.ANTHROPIC_API_KEY
-  if (!anthropicKey) {
-    return res.status(500).json({ message: 'ANTHROPIC_API_KEY 환경변수가 없습니다.' })
+  if (!isValidFigmaId(figmaFileKey) || !isValidFigmaId(figmaFrameId)) {
+    return res.status(400).json({ message: '유효하지 않은 Figma ID 형식입니다.' })
   }
+
+  if (figmaBaseFrameId && !isValidFigmaId(figmaBaseFrameId)) {
+    return res.status(400).json({ message: '유효하지 않은 베이스 프레임 ID 형식입니다.' })
+  }
+
+  // screenshotDataUrl 형식 검증
+  const dataUrlMatch = screenshotDataUrl.match(/^data:image\/(png|jpeg|webp);base64,(.+)$/)
+  if (!dataUrlMatch) {
+    return res.status(400).json({ message: '유효하지 않은 이미지 형식입니다.' })
+  }
+  const rawImplBase64 = dataUrlMatch[2]
 
   try {
-    // 1. Figma API → 프레임 PNG export (신규 디자인 scale=2, 베이스 scale=1)
     const figmaExports = await Promise.all([
       exportFigmaFrame(figmaToken, figmaFileKey, figmaFrameId, 2),
       figmaBaseFrameId ? exportFigmaFrame(figmaToken, figmaFileKey, figmaBaseFrameId, 1) : null,
     ])
 
-    // 2. Figma 이미지 → base64 (Claude API 전달용)
     const [figmaImageBase64, figmaBaseBase64] = await Promise.all([
       urlToBase64(figmaExports[0]),
       figmaExports[1] ? urlToBase64(figmaExports[1]) : null,
     ])
 
-    // 3. 구현 스크린샷 base64 추출 후 Figma 크기에 맞게 정규화
-    const rawImplBase64 = screenshotDataUrl.replace(/^data:image\/\w+;base64,/, '')
-    const implBase64    = await normalizeScreenshot(figmaImageBase64, rawImplBase64)
+    const implBase64 = await normalizeScreenshot(figmaImageBase64, rawImplBase64)
+    const report     = await analyzeWithClaude(anthropicKey, figmaImageBase64, implBase64, figmaBaseBase64)
 
-    // 4. Claude Vision으로 diff 분석
-    const report = await analyzeWithClaude(anthropicKey, figmaImageBase64, implBase64, figmaBaseBase64)
-
-    // 5. 응답 (figmaImageUrl도 포함해서 팝업 오버레이에 쓸 수 있게)
     res.json({ ...report, figmaImageUrl: figmaExports[0] })
 
   } catch (err) {
     console.error('[compare error]', err)
-    res.status(500).json({ message: err.message })
+    const isKnown = ['Figma', 'Claude', 'FIGMA', 'ANTHROPIC', '이미지'].some(k => err.message?.includes(k))
+    res.status(500).json({ message: isKnown ? err.message : '분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' })
   }
 })
 
 // ─── Figma: 프레임 PNG export ─────────────────────────────────
 async function exportFigmaFrame(token, fileKey, frameId, scale = 2) {
   const url = `https://api.figma.com/v1/images/${fileKey}?ids=${frameId}&format=png&scale=${scale}`
-  const res  = await fetch(url, { headers: { 'X-Figma-Token': token } })
+  const res = await fetchWithTimeout(url, { headers: { 'X-Figma-Token': token } })
 
   if (!res.ok) throw new Error(`Figma export 실패: ${res.status}`)
 
@@ -69,7 +90,8 @@ async function exportFigmaFrame(token, fileKey, frameId, scale = 2) {
 
 // ─── URL → base64 변환 ───────────────────────────────────────
 async function urlToBase64(url) {
-  const res    = await fetch(url)
+  const res = await fetchWithTimeout(url)
+  if (!res.ok) throw new Error(`이미지 다운로드 실패: ${res.status}`)
   const buffer = await res.arrayBuffer()
   return Buffer.from(buffer).toString('base64')
 }
@@ -165,16 +187,16 @@ severity 기준:
     ...(figmaBaseBase64 && { 'anthropic-beta': 'prompt-caching-2024-07-31' }),
   }
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers,
     body: JSON.stringify({
       model:      'claude-sonnet-4-6',
-      max_tokens: 2048,
+      max_tokens: 4096,
       system:     systemPrompt,
       messages: [{ role: 'user', content: userContent }],
     }),
-  })
+  }, 60_000) // Claude는 60초 타임아웃
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -184,18 +206,22 @@ severity 기준:
   const data = await res.json()
   const text = data.content?.[0]?.text ?? ''
 
-  // JSON 파싱: 코드블록 제거 → 중괄호 범위 추출 순으로 시도
-  const stripped = text.replace(/```json\n?|\n?```/g, '').trim()
+  return parseJson(text)
+}
 
-  // 1차: 전체 파싱
-  try { return JSON.parse(stripped) } catch {}
+// ─── JSON 파싱: 코드블록 제거 → 직접 파싱 → 제어문자 제거 후 재시도
+function parseJson(text) {
+  const clean = text.replace(/```json\n?|\n?```/g, '').trim()
 
-  // 2차: 첫 { ~ 마지막 } 추출
-  const start = stripped.indexOf('{')
-  const end   = stripped.lastIndexOf('}')
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(stripped.slice(start, end + 1)) } catch {}
-  }
+  try { return JSON.parse(clean) } catch {}
+
+  // 문자열 값 내 리터럴 제어문자(줄바꿈·탭 등)만 제거 후 재시도
+  const sanitized = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
+    .replace(/(?<=[^\\])\n/g, ' ')
+    .replace(/(?<=[^\\])\r/g, ' ')
+    .replace(/(?<=[^\\])\t/g, ' ')
+
+  try { return JSON.parse(sanitized) } catch {}
 
   console.error('[Claude 응답 파싱 실패]', text)
   throw new Error('AI 분석 결과 파싱에 실패했습니다.')

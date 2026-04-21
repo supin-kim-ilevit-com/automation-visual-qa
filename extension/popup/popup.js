@@ -5,6 +5,7 @@ const STORAGE_KEYS = { TOKEN: 'figma_token', FILE_URL: 'figma_url' }
 const $ = (id) => document.getElementById(id)
 const tokenInput      = $('figma-token')
 const urlInput        = $('figma-url')
+const pageSelect      = $('page-select')
 const frameSelect     = $('frame-select')
 const baseFrameSelect = $('base-frame-select')
 const btnLoadFrames   = $('btn-load-frames')
@@ -40,8 +41,10 @@ urlInput.addEventListener('input', () => {
 })
 
 function resetFrameSelects() {
-  frameSelect.innerHTML     = '<option value="">— 불러오기를 눌러주세요 —</option>'
+  pageSelect.innerHTML      = '<option value="">— 불러오기를 눌러주세요 —</option>'
+  frameSelect.innerHTML     = '<option value="">— 페이지를 선택해주세요 —</option>'
   baseFrameSelect.innerHTML = '<option value="">— 선택 안 함 (전체 화면 비교) —</option>'
+  pageSelect.disabled      = true
   frameSelect.disabled     = true
   baseFrameSelect.disabled = true
 }
@@ -56,7 +59,7 @@ function extractFigmaFileKey(url) {
   return match ? match[1] : null
 }
 
-// ─── Frame 목록 불러오기 ─────────────────────────────────────
+// ─── 1단계: 페이지 목록 불러오기 ────────────────────────────
 btnLoadFrames.addEventListener('click', async () => {
   const token   = tokenInput.value.trim()
   const fileKey = extractFigmaFileKey(urlInput.value.trim())
@@ -64,40 +67,82 @@ btnLoadFrames.addEventListener('click', async () => {
   if (!token)   return showStatus('Figma 토큰을 입력해주세요', 'error')
   if (!fileKey) return showStatus('올바른 Figma URL을 입력해주세요', 'error')
 
-  showStatus('프레임 목록을 불러오는 중...', 'loading')
+  showStatus('페이지 목록을 불러오는 중...', 'loading')
   btnLoadFrames.disabled = true
 
   try {
-    const res = await fetch(`https://api.figma.com/v1/files/${fileKey}?depth=2`, {
+    const res = await fetch(`https://api.figma.com/v1/files/${fileKey}?depth=1`, {
       headers: { 'X-Figma-Token': token },
     })
 
     if (!res.ok) throw new Error(`Figma API 오류: ${res.status}`)
 
-    const data   = await res.json()
-    const frames = (data.document?.children ?? []).flatMap(page =>
-      (page.children ?? [])
-        .filter(n => n.type === 'FRAME' || n.type === 'COMPONENT' || n.type === 'SECTION')
-        .map(n => ({ id: n.id, name: `${page.name} / ${n.name}` }))
-    )
+    const data  = await res.json()
+    const pages = data.document?.children ?? []
 
-    if (frames.length === 0) throw new Error('프레임을 찾을 수 없습니다')
+    if (pages.length === 0) throw new Error('페이지를 찾을 수 없습니다')
 
-    const options = frames.map(f => `<option value="${f.id}">${f.name}</option>`).join('')
-
-    frameSelect.innerHTML     = options
-    baseFrameSelect.innerHTML = '<option value="">— 선택 안 함 (전체 화면 비교) —</option>' + options
-    frameSelect.disabled     = false
-    baseFrameSelect.disabled = false
+    pageSelect.innerHTML = '<option value="">— 페이지를 선택해주세요 —</option>' +
+      pages.map(p => `<option value="${p.id}">${p.name}</option>`).join('')
+    pageSelect.disabled = false
 
     hideStatus()
-    updateCaptureBtn()
   } catch (err) {
     showStatus(err.message, 'error')
   } finally {
     btnLoadFrames.disabled = false
   }
 })
+
+// ─── 2단계: 선택한 페이지의 프레임 불러오기 ─────────────────
+pageSelect.addEventListener('change', async () => {
+  const token   = tokenInput.value.trim()
+  const fileKey = extractFigmaFileKey(urlInput.value.trim())
+  if (pageSelect.value) await loadFramesForPage(token, fileKey, pageSelect.value)
+})
+
+async function loadFramesForPage(token, fileKey, pageId) {
+  showStatus('프레임 목록을 불러오는 중...', 'loading')
+  pageSelect.disabled      = true
+  frameSelect.innerHTML    = '<option value="">⏳ 불러오는 중...</option>'
+  frameSelect.disabled     = true
+  baseFrameSelect.innerHTML = '<option value="">⏳ 불러오는 중...</option>'
+  baseFrameSelect.disabled = true
+  updateCaptureBtn()
+
+  try {
+    const res = await fetch(
+      `https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodeURIComponent(pageId)}&depth=1`,
+      { headers: { 'X-Figma-Token': token } }
+    )
+
+    if (!res.ok) throw new Error(`Figma API 오류: ${res.status}`)
+
+    const data     = await res.json()
+    const pageNode = data.nodes?.[pageId]?.document
+    const frames   = (pageNode?.children ?? [])
+      .filter(n => n.type === 'FRAME' || n.type === 'COMPONENT' || n.type === 'SECTION')
+      .map(n => ({ id: n.id, name: n.name }))
+
+    if (frames.length === 0) throw new Error('이 페이지에 프레임이 없습니다')
+
+    const options = frames.map(f => `<option value="${f.id}">${f.name}</option>`).join('')
+    frameSelect.innerHTML     = options
+    baseFrameSelect.innerHTML = '<option value="">— 선택 안 함 (전체 화면 비교) —</option>' + options
+    pageSelect.disabled      = false
+    frameSelect.disabled     = false
+    baseFrameSelect.disabled = false
+
+    hideStatus()
+    updateCaptureBtn()
+  } catch (err) {
+    frameSelect.innerHTML     = '<option value="">— 불러오기 실패 —</option>'
+    baseFrameSelect.innerHTML = '<option value="">— 불러오기 실패 —</option>'
+    pageSelect.disabled      = false
+    showStatus(err.message, 'error')
+    updateCaptureBtn()
+  }
+}
 
 frameSelect.addEventListener('change', updateCaptureBtn)
 
@@ -239,12 +284,6 @@ $('btn-reset').addEventListener('click', () => {
   btnCapture.disabled = false
 })
 
-$('btn-toggle-overlay').addEventListener('click', () => {
-  const body = $('overlay-body')
-  const btn  = $('btn-toggle-overlay')
-  const collapsed = body.classList.toggle('collapsed')
-  btn.textContent = collapsed ? '보이기 ↓' : '숨기기 ↑'
-})
 
 // ─── 유틸 ────────────────────────────────────────────────────
 function showStatus(msg, type = '') {

@@ -241,34 +241,6 @@
       align-items: center;
     }
 
-    .btn-toggle-overlay {
-      background: none;
-      border: none;
-      color: #555;
-      font-size: 10px;
-      cursor: pointer;
-      padding: 0;
-      margin-left: auto;
-      line-height: 1;
-    }
-
-    .btn-toggle-overlay:hover { color: #a78bfa; }
-
-    .overlay-body {
-      overflow: hidden;
-      transition: max-height 0.25s ease, opacity 0.2s ease;
-      max-height: 600px;
-      opacity: 1;
-    }
-
-    .overlay-body.collapsed {
-      max-height: 0;
-      opacity: 0;
-      margin-bottom: -8px;
-    }
-
-    .overlay-label .side-figma { color: #a78bfa; font-weight: 600; }
-    .overlay-label .side-impl  { color: #60a5fa; font-weight: 600; }
 
     input[type="range"] {
       -webkit-appearance: none;
@@ -301,8 +273,7 @@
       overflow: hidden;
       background: #111;
       border: 1px solid #222;
-      aspect-ratio: 3 / 5;
-      height: auto;
+      height: 640px;
       --clip: 50%;
     }
 
@@ -434,21 +405,21 @@
     }
 
     .issue-desc {
-      font-size: 12px;
+      font-size: 13px;
       color: #ccc;
-      line-height: 1.4;
+      line-height: 1.5;
     }
 
     .issue-diff {
       display: grid;
       grid-template-columns: 36px 1fr;
-      gap: 2px 6px;
-      margin-top: 5px;
+      gap: 3px 6px;
+      margin-top: 6px;
       align-items: baseline;
     }
 
     .diff-label {
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.3px;
@@ -456,7 +427,7 @@
     }
 
     .diff-value {
-      font-size: 11px;
+      font-size: 12px;
       font-family: 'SF Mono', 'Fira Code', monospace;
       padding: 1px 5px;
       border-radius: 3px;
@@ -551,12 +522,20 @@
       </div>
     </div>
 
+    <!-- 페이지 선택 -->
+    <div class="field">
+      <label>페이지</label>
+      <select id="page-select" disabled>
+        <option value="">— 불러오기를 눌러주세요 —</option>
+      </select>
+    </div>
+
     <!-- Frame 선택: 신규 디자인 + 베이스 -->
     <div class="frame-pair">
       <div class="frame-pair-item">
         <label>신규 디자인 프레임</label>
         <select id="frame-select" disabled>
-          <option value="">— 불러오기를 눌러주세요 —</option>
+          <option value="">— 페이지를 선택해주세요 —</option>
         </select>
       </div>
       <div class="frame-pair-item">
@@ -602,10 +581,6 @@
 
     <!-- 오버레이 슬라이더 -->
     <div class="overlay-section">
-      <div class="overlay-label">
-        <button class="btn-toggle-overlay" id="btn-toggle-overlay">숨기기 ↑</button>
-      </div>
-      <div class="overlay-body" id="overlay-body">
       <input type="range" id="overlay-slider" min="0" max="100" value="50" />
       <div class="overlay-images" id="overlay-container">
         <img class="figma" id="img-figma" src="" alt="Figma design" />
@@ -614,7 +589,6 @@
         <span class="overlay-tag figma">Figma</span>
         <span class="overlay-tag impl">구현</span>
       </div>
-      </div><!-- /overlay-body -->
     </div>
 
     <!-- 이슈 목록 -->
