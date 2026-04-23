@@ -23,13 +23,14 @@ function isValidFigmaId(id) { return FIGMA_ID_RE.test(id) }
 
 // ─── POST /compare ────────────────────────────────────────────
 app.post('/compare', async (req, res) => {
-  const { figmaToken, figmaFileKey, figmaFrameId, figmaBaseFrameId, screenshotDataUrl } = req.body
+  const { figmaToken, figmaFileKey, figmaFrameId, figmaBaseFrameId, screenshotDataUrl, cropRegion } = req.body
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) return res.status(500).json({ message: 'ANTHROPIC_API_KEY 환경변수가 없습니다.' })
 
   const missing = ['figmaToken', 'figmaFileKey', 'figmaFrameId', 'screenshotDataUrl']
     .filter(k => !req.body[k])
+
   if (missing.length > 0) {
     return res.status(400).json({ message: `필수 파라미터 누락: ${missing.join(', ')}` })
   }
@@ -47,7 +48,9 @@ app.post('/compare', async (req, res) => {
   if (!dataUrlMatch) {
     return res.status(400).json({ message: '유효하지 않은 이미지 형식입니다.' })
   }
-  const rawImplBase64 = dataUrlMatch[2]
+  
+  const rawImplBase64  = dataUrlMatch[2]
+  const capturedViewport = req.body.capturedViewport ?? null
 
   try {
     const figmaExports = await Promise.all([
@@ -60,10 +63,37 @@ app.post('/compare', async (req, res) => {
       figmaExports[1] ? urlToBase64(figmaExports[1]) : null,
     ])
 
-    const implBase64 = await normalizeScreenshot(figmaImageBase64, rawImplBase64)
-    const report     = await analyzeWithClaude(anthropicKey, figmaImageBase64, implBase64, figmaBaseBase64)
+    // Figma 프레임 실제 크기 추출 (scale=2로 export했으므로 ÷2)
+    const figmaMeta    = await sharp(Buffer.from(figmaImageBase64, 'base64')).metadata()
+    const figmaFrame   = { width: Math.round(figmaMeta.width / 2), height: Math.round(figmaMeta.height / 2) }
 
-    res.json({ ...report, figmaImageUrl: figmaExports[0] })
+    let figmaBase64ForAnalysis = figmaImageBase64
+    let implBase64ForAnalysis
+    let cropResult = null
+
+    if (cropRegion) {
+      cropResult = await cropAndMatch(anthropicKey, figmaImageBase64, rawImplBase64, cropRegion)
+      implBase64ForAnalysis = await normalizeScreenshot(cropResult.croppedFigmaBase64, cropResult.croppedImplBase64)
+      figmaBase64ForAnalysis = cropResult.croppedFigmaBase64
+    } else {
+      implBase64ForAnalysis = await normalizeScreenshot(figmaImageBase64, rawImplBase64)
+    }
+
+    const report = await analyzeWithClaude(
+      anthropicKey, figmaBase64ForAnalysis, implBase64ForAnalysis,
+      cropRegion ? null : figmaBaseBase64,
+      { figmaFrame, capturedViewport }, !!cropRegion
+    )
+
+    const meta = { figmaFrame, capturedViewport }
+    const responseData = { ...report, meta }
+    if (cropRegion) {
+      responseData.figmaImageUrl = `data:image/png;base64,${figmaBase64ForAnalysis}`
+      responseData.implImageDataUrl = `data:image/png;base64,${cropResult.croppedImplBase64}`
+    } else {
+      responseData.figmaImageUrl = figmaExports[0]
+    }
+    res.json(responseData)
 
   } catch (err) {
     console.error('[compare error]', err)
@@ -111,8 +141,78 @@ async function normalizeScreenshot(figmaBase64, implBase64) {
   return normalized.toString('base64')
 }
 
+// ─── 크롭: 구현 영역 추출 + Figma 매칭 ───────────────────────
+async function cropAndMatch(apiKey, figmaBase64, rawImplBase64, cropRegion) {
+  const implBuffer  = Buffer.from(rawImplBase64, 'base64')
+  const figmaBuffer = Buffer.from(figmaBase64,   'base64')
+
+  const { width: iW, height: iH } = await sharp(implBuffer).metadata()
+
+  // Clamp crop to valid bounds
+  const x = Math.max(0, Math.min(0.95, cropRegion.x))
+  const y = Math.max(0, Math.min(0.95, cropRegion.y))
+  const w = Math.max(0.05, Math.min(1 - x, cropRegion.width))
+  const h = Math.max(0.05, Math.min(1 - y, cropRegion.height))
+
+  const croppedImplBuffer = await sharp(implBuffer)
+    .extract({ left: Math.round(x * iW), top: Math.round(y * iH), width: Math.round(w * iW), height: Math.round(h * iH) })
+    .png().toBuffer()
+  const croppedImplBase64 = croppedImplBuffer.toString('base64')
+
+  // Find matching region in Figma using Claude Vision
+  const figmaSmall     = await sharp(figmaBuffer).resize({ width: 800 }).png().toBuffer()
+  const figmaSmallB64  = figmaSmall.toString('base64')
+  let figmaMatch = { x, y, width: w, height: h } // fallback: same ratios
+
+  try {
+    const matchRes = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: '첫 번째 이미지는 구현 화면의 특정 UI 영역입니다. 두 번째 이미지는 피그마 전체 디자인입니다. 텍스트/이미지 콘텐츠는 다를 수 있으니 무시하고, 레이아웃 구조와 위치만으로 대응하는 피그마 영역을 찾아 JSON으로만 응답하세요: {"x":0~1사이 숫자,"y":0~1사이 숫자,"width":0~1사이 숫자,"height":0~1사이 숫자}' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: croppedImplBase64 } },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: figmaSmallB64 } },
+          ],
+        }],
+      }),
+    }, 30_000)
+
+    if (matchRes.ok) {
+      const data = await matchRes.json()
+      const text = data.content?.[0]?.text ?? ''
+      const jsonMatch = text.match(/\{[\s\S]*?\}/)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0])
+        if (['x', 'y', 'width', 'height'].every(k => typeof parsed[k] === 'number' && parsed[k] >= 0 && parsed[k] <= 1)) {
+          figmaMatch = parsed
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[figma match fallback]', err.message)
+  }
+
+  // Crop Figma using matched region
+  const { width: fW, height: fH } = await sharp(figmaBuffer).metadata()
+  const fX  = Math.max(0, Math.min(0.95, figmaMatch.x))
+  const fY  = Math.max(0, Math.min(0.95, figmaMatch.y))
+  const fW2 = Math.max(0.05, Math.min(1 - fX, figmaMatch.width))
+  const fH2 = Math.max(0.05, Math.min(1 - fY, figmaMatch.height))
+
+  const croppedFigmaBuffer = await sharp(figmaBuffer)
+    .extract({ left: Math.round(fX * fW), top: Math.round(fY * fH), width: Math.round(fW2 * fW), height: Math.round(fH2 * fH) })
+    .png().toBuffer()
+
+  return { croppedImplBase64, croppedFigmaBase64: croppedFigmaBuffer.toString('base64') }
+}
+
 // ─── Claude Vision: 두 이미지 diff 분석 ─────────────────────
-async function analyzeWithClaude(apiKey, figmaBase64, implBase64, figmaBaseBase64 = null) {
+async function analyzeWithClaude(apiKey, figmaBase64, implBase64, figmaBaseBase64 = null, sizeContext = null, isCropMode = false) {
   const systemPrompt = `당신은 UI/UX 품질 검수 전문가입니다.
 이미지를 비교하여 디자인과 구현의 차이를 정밀하게 분석합니다.
 
@@ -129,7 +229,8 @@ async function analyzeWithClaude(apiKey, figmaBase64, implBase64, figmaBaseBase6
       "description": "한국어로 간결하게. 반드시 구체적 수치를 포함. 상대적 표현('더 큰', '좁아 보임' 등) 절대 금지.",
       "expected": "Figma 기준값. 반드시 구체적 단위 포함 (예: padding: 12px 24px, font-size: 16px, color: #FF5733, gap: 8px)",
       "actual": "구현된 값. 반드시 구체적 단위 포함 (예: padding: 8px 16px, font-size: 14px, color: #FF0000, gap: 4px)",
-      "fix": "수정 제안. 구체적 속성명과 값 포함 (예: padding을 12px 24px로 변경, font-size를 16px로 변경)"
+      "fix": "수정 제안. 구체적 속성명과 값 포함 (예: padding을 12px 24px로 변경, font-size를 16px로 변경)",
+      "viewportDiff": true 또는 false (spacing/size/alignment 이슈가 뷰포트 크기 차이로 인한 것일 가능성이 높으면 true)
     }
   ]
 }
@@ -144,12 +245,17 @@ severity 기준:
 - critical: 레이아웃 깨짐, 색상 완전 불일치, 컴포넌트 누락
 - major: 패딩/마진 8px 이상 차이, 폰트 크기 차이, 정렬 불일치
 - minor: 4px 미만 간격 차이, 미세한 색상 차이, 그림자 세기 차이`
+  + (isCropMode ? '\n\n[크롭 모드] 이 이미지들은 특정 UI 영역만 크롭된 것입니다. 텍스트, 이미지 등 콘텐츠 차이는 무시하고 레이아웃, 간격, 색상, 폰트 스타일에만 집중하세요.' : '')
+
+  const viewportNote = sizeContext?.figmaFrame && sizeContext?.capturedViewport
+    ? `\n\n[화면 크기 정보]\n- Figma 프레임: ${sizeContext.figmaFrame.width}×${sizeContext.figmaFrame.height}px\n- 실제 캡처 뷰포트: ${sizeContext.capturedViewport.width}×${sizeContext.capturedViewport.height}px\nspacing/size/alignment 이슈를 분석할 때, 이 뷰포트 차이로 인해 절대 px값이 비율적으로 다르게 보일 수 있습니다. 절대값 차이가 뷰포트 비율 차이(${Math.round(sizeContext.capturedViewport.width / sizeContext.figmaFrame.width * 100)}%) 범위 내라면 viewportDiff: true로 표시해주세요.`
+    : ''
 
   const userContent = figmaBaseBase64
     ? [
         {
           type: 'text',
-          text: '세 개의 이미지를 분석해주세요.\n- 1번: Figma 베이스 화면 (기존 메인 화면)\n- 2번: Figma 신규 디자인 (메인 화면 + 새로 추가된 레이어)\n- 3번: 실제 구현 화면\n\n1번과 2번을 비교해 새로 추가된 요소(오버레이, 텍스트, 이미지 에셋 등)를 먼저 파악하고, 해당 요소들이 3번 구현에서 2번 Figma와 얼마나 일치하는지만 분석해주세요. 베이스 화면(1번과 동일한 부분)은 분석에서 제외하세요.',
+          text: `세 개의 이미지를 분석해주세요.\n- 1번: Figma 베이스 화면 (기존 메인 화면)\n- 2번: Figma 신규 디자인 (메인 화면 + 새로 추가된 레이어)\n- 3번: 실제 구현 화면\n\n1번과 2번을 비교해 새로 추가된 요소(오버레이, 텍스트, 이미지 에셋 등)를 먼저 파악하고, 해당 요소들이 3번 구현에서 2번 Figma와 얼마나 일치하는지만 분석해주세요. 베이스 화면(1번과 동일한 부분)은 분석에서 제외하세요.${viewportNote}`,
         },
         {
           type:          'image',
@@ -168,7 +274,9 @@ severity 기준:
     : [
         {
           type: 'text',
-          text: '첫 번째 이미지는 Figma 디자인 원본이고, 두 번째 이미지는 실제 구현 화면입니다. 차이점을 분석해주세요.',
+          text: isCropMode
+            ? `첫 번째 이미지는 피그마 디자인의 특정 영역이고, 두 번째 이미지는 그에 대응하는 실제 구현 화면입니다. 레이아웃/스타일 차이만 분석해주세요 (텍스트·이미지 콘텐츠 차이는 무시).${viewportNote}`
+            : `첫 번째 이미지는 Figma 디자인 원본이고, 두 번째 이미지는 실제 구현 화면입니다. 차이점을 분석해주세요.${viewportNote}`,
         },
         {
           type:   'image',

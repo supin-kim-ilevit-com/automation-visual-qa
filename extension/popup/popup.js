@@ -20,6 +20,17 @@ const imgImpl         = $('img-impl')
 const scoreCircle     = $('score-circle')
 const scoreTitle      = $('score-title')
 const scoreSubtitle   = $('score-subtitle')
+const cropCanvas      = $('crop-canvas')
+const btnCropMode     = $('btn-crop-mode')
+const btnCropConfirm  = $('btn-crop-confirm')
+const btnCropCancel   = $('btn-crop-cancel')
+
+// ─── Crop & comparison state ─────────────────────────────────
+let lastScreenshotDataUrl = null
+let lastViewport          = null
+let cropActive            = false
+let cropDragStart         = null
+let pendingCropRegion     = null
 
 // ─── Init: 저장된 값 복원 ────────────────────────────────────
 chrome.storage.local.get([STORAGE_KEYS.TOKEN, STORAGE_KEYS.FILE_URL], (data) => {
@@ -146,49 +157,66 @@ async function loadFramesForPage(token, fileKey, pageId) {
 
 frameSelect.addEventListener('change', updateCaptureBtn)
 
+// ─── 비교 실행 (최초 + 크롭 재비교 공통) ─────────────────────
+async function runComparison(screenshotDataUrl, viewport, cropRegion = null) {
+  const token       = tokenInput.value.trim()
+  const fileKey     = extractFigmaFileKey(urlInput.value.trim())
+  const frameId     = frameSelect.value
+  const baseFrameId = baseFrameSelect.value || undefined
+
+  showStatus(
+    cropRegion ? '선택 영역 분석 중...' :
+    (baseFrameId ? 'Figma 베이스·신규 프레임 비교 분석 중...' : 'Figma와 비교 분석 중...'),
+    'loading'
+  )
+
+  const res = await fetch(`${SERVER_URL}/compare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      figmaToken:       token,
+      figmaFileKey:     fileKey,
+      figmaFrameId:     frameId,
+      figmaBaseFrameId: baseFrameId,
+      screenshotDataUrl,
+      capturedViewport: viewport,
+      cropRegion,
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || `서버 오류: ${res.status}`)
+  }
+
+  const report = await res.json()
+  hideStatus()
+  renderResult(report, screenshotDataUrl)
+}
+
 // ─── 캡처 & 비교 ─────────────────────────────────────────────
 btnCapture.addEventListener('click', async () => {
-  const token         = tokenInput.value.trim()
-  const fileKey       = extractFigmaFileKey(urlInput.value.trim())
-  const frameId       = frameSelect.value
-  const baseFrameId   = baseFrameSelect.value || undefined
-
   btnCapture.disabled = true
   hideResult()
   showStatus('화면 캡처 중...', 'loading')
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+
+    const [{ result: viewport }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => ({ width: window.innerWidth, height: window.innerHeight }),
+    })
+
     const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: 'png',
       quality: 100,
     })
 
-    showStatus(
-      baseFrameId ? 'Figma 베이스·신규 프레임 비교 분석 중...' : 'Figma와 비교 분석 중...',
-      'loading'
-    )
+    lastScreenshotDataUrl = screenshotDataUrl
+    lastViewport = viewport
 
-    const res = await fetch(`${SERVER_URL}/compare`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        figmaToken:       token,
-        figmaFileKey:     fileKey,
-        figmaFrameId:     frameId,
-        figmaBaseFrameId: baseFrameId,
-        screenshotDataUrl,
-      }),
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.message || `서버 오류: ${res.status}`)
-    }
-
-    const report = await res.json()
-    hideStatus()
-    renderResult(report, screenshotDataUrl)
+    await runComparison(screenshotDataUrl, viewport)
 
   } catch (err) {
     showStatus(err.message, 'error')
@@ -206,7 +234,7 @@ function renderResult(report, screenshotDataUrl) {
 
   if (report.figmaImageUrl) {
     imgFigma.src = report.figmaImageUrl
-    imgImpl.src  = screenshotDataUrl
+    imgImpl.src  = report.implImageDataUrl || screenshotDataUrl
     setClip(50)
     overlaySlider.value = 50
   }
@@ -217,7 +245,18 @@ function renderResult(report, screenshotDataUrl) {
     const sorted = [...report.issues].sort((a, b) =>
       (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3)
     )
+    const meta = report.meta
     sorted.forEach(issue => {
+      const showViewportWarn = issue.viewportDiff &&
+        ['spacing', 'size', 'alignment'].includes(issue.category) &&
+        meta?.figmaFrame && meta?.capturedViewport
+
+      const viewportWarnHtml = showViewportWarn ? `
+        <div class="issue-viewport-warn">
+          ⚠️ 뷰포트 차이 영향 가능
+          (Figma ${meta.figmaFrame.width}px → 실제 ${meta.capturedViewport.width}px)
+        </div>` : ''
+
       const el = document.createElement('div')
       el.className = 'issue-item'
       el.innerHTML = `
@@ -233,6 +272,7 @@ function renderResult(report, screenshotDataUrl) {
               ${issue.expected ? `<span class="diff-label">Figma</span><span class="diff-value expected">${issue.expected}</span>` : ''}
               ${issue.actual   ? `<span class="diff-label">현재</span><span class="diff-value actual">${issue.actual}</span>` : ''}
             </div>` : ''}
+          ${viewportWarnHtml}
           ${issue.fix ? `<div class="issue-fix">${issue.fix}</div>` : ''}
         </div>
       `
@@ -243,6 +283,7 @@ function renderResult(report, screenshotDataUrl) {
   }
 
   chrome.storage.local.set({ last_report: report })
+  exitCropMode()
   resultEl.classList.add('visible')
   btnCapture.disabled = false
 }
@@ -280,6 +321,8 @@ $('btn-copy').addEventListener('click', async () => {
 })
 
 $('btn-reset').addEventListener('click', () => {
+  exitCropMode()
+  pendingCropRegion = null
   hideResult()
   btnCapture.disabled = false
 })
@@ -295,3 +338,137 @@ function showStatus(msg, type = '') {
 
 function hideStatus()  { statusEl.className = 'status' }
 function hideResult()  { resultEl.classList.remove('visible') }
+
+// ─── 크롭 헬퍼: object-fit:contain 레터박스 보정 ─────────────
+function getImageRenderedBounds(imgEl, containerEl) {
+  const cW = containerEl.offsetWidth
+  const cH = containerEl.offsetHeight
+  const imgAspect = imgEl.naturalWidth / imgEl.naturalHeight
+  const cAspect   = cW / cH
+  let rW, rH, oX, oY
+  if (imgAspect > cAspect) {
+    rW = cW; rH = cW / imgAspect; oX = 0;              oY = (cH - rH) / 2
+  } else {
+    rH = cH; rW = cH * imgAspect; oX = (cW - rW) / 2; oY = 0
+  }
+  return { rW, rH, oX, oY }
+}
+
+function clampToImageBounds(x, y, b) {
+  return {
+    x: Math.max(b.oX, Math.min(b.oX + b.rW, x)),
+    y: Math.max(b.oY, Math.min(b.oY + b.rH, y)),
+  }
+}
+
+function drawCropOverlay(canvas, start, end, b) {
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const x = Math.min(start.x, end.x), y = Math.min(start.y, end.y)
+  const w = Math.abs(end.x - start.x), h = Math.abs(end.y - start.y)
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'
+  ctx.fillRect(b.oX, b.oY, b.rW, b.rH)
+  ctx.clearRect(x, y, w, h)
+  ctx.strokeStyle = '#60a5fa'
+  ctx.lineWidth = 2
+  ctx.strokeRect(x, y, w, h)
+}
+
+function exitCropMode() {
+  cropActive    = false
+  cropDragStart = null
+  cropCanvas.style.display = 'none'
+  cropCanvas.getContext('2d').clearRect(0, 0, cropCanvas.width, cropCanvas.height)
+  btnCropMode.style.display    = ''
+  btnCropConfirm.style.display = 'none'
+  btnCropCancel.style.display  = 'none'
+}
+
+// ─── 크롭 모드 이벤트 ─────────────────────────────────────────
+btnCropMode.addEventListener('click', () => {
+  cropActive    = true
+  cropDragStart = null
+  pendingCropRegion = null
+
+  cropCanvas.width  = overlayContainer.offsetWidth
+  cropCanvas.height = overlayContainer.offsetHeight
+  cropCanvas.style.display = 'block'
+
+  setClip(100)
+  overlaySlider.value = 100
+
+  btnCropMode.style.display    = 'none'
+  btnCropConfirm.style.display = 'none'
+  btnCropCancel.style.display  = ''
+
+  // 레터박스 영역 어둡게 표시
+  const b   = getImageRenderedBounds(imgImpl, overlayContainer)
+  const ctx = cropCanvas.getContext('2d')
+  ctx.clearRect(0, 0, cropCanvas.width, cropCanvas.height)
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  if (b.oY > 0)                      ctx.fillRect(0,         0,         cropCanvas.width, b.oY)
+  if (b.oY + b.rH < cropCanvas.height) ctx.fillRect(0,       b.oY + b.rH, cropCanvas.width, cropCanvas.height - b.oY - b.rH)
+  if (b.oX > 0)                      ctx.fillRect(0,         0,         b.oX,             cropCanvas.height)
+  if (b.oX + b.rW < cropCanvas.width)  ctx.fillRect(b.oX + b.rW, 0,    cropCanvas.width - b.oX - b.rW, cropCanvas.height)
+})
+
+cropCanvas.addEventListener('mousedown', e => {
+  const b   = getImageRenderedBounds(imgImpl, overlayContainer)
+  cropDragStart     = clampToImageBounds(e.offsetX, e.offsetY, b)
+  pendingCropRegion = null
+  btnCropConfirm.style.display = 'none'
+})
+
+cropCanvas.addEventListener('mousemove', e => {
+  if (!cropDragStart) return
+  const b   = getImageRenderedBounds(imgImpl, overlayContainer)
+  const cur = clampToImageBounds(e.offsetX, e.offsetY, b)
+  drawCropOverlay(cropCanvas, cropDragStart, cur, b)
+})
+
+cropCanvas.addEventListener('mouseup', e => {
+  if (!cropDragStart) return
+  const b   = getImageRenderedBounds(imgImpl, overlayContainer)
+  const end = clampToImageBounds(e.offsetX, e.offsetY, b)
+
+  const selW = Math.abs(end.x - cropDragStart.x)
+  const selH = Math.abs(end.y - cropDragStart.y)
+
+  if (selW / b.rW < 0.05 || selH / b.rH < 0.05) {
+    showStatus('더 넓은 영역을 선택해주세요', 'error')
+    setTimeout(hideStatus, 2000)
+    cropDragStart = null
+    return
+  }
+
+  pendingCropRegion = {
+    x:      Math.max(0, (Math.min(cropDragStart.x, end.x) - b.oX) / b.rW),
+    y:      Math.max(0, (Math.min(cropDragStart.y, end.y) - b.oY) / b.rH),
+    width:  Math.min(1, selW / b.rW),
+    height: Math.min(1, selH / b.rH),
+  }
+  pendingCropRegion.width  = Math.min(pendingCropRegion.width,  1 - pendingCropRegion.x)
+  pendingCropRegion.height = Math.min(pendingCropRegion.height, 1 - pendingCropRegion.y)
+
+  cropDragStart = null
+  btnCropConfirm.style.display = ''
+})
+
+btnCropConfirm.addEventListener('click', async () => {
+  if (!pendingCropRegion || !lastScreenshotDataUrl) return
+  exitCropMode()
+  btnCapture.disabled = true
+  try {
+    await runComparison(lastScreenshotDataUrl, lastViewport, pendingCropRegion)
+  } catch (err) {
+    showStatus(err.message, 'error')
+  } finally {
+    btnCapture.disabled = false
+  }
+})
+
+btnCropCancel.addEventListener('click', () => {
+  exitCropMode()
+  setClip(50)
+  overlaySlider.value = 50
+})
